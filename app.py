@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
+from datetime import datetime, timedelta # <--- ADD THIS
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Finance HQ", page_icon="💰", layout="wide")
 
@@ -16,7 +16,7 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 # --- READ DATA (Cached) ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def load_data():
     client = get_gspread_client()
     sheet = client.open("Master_Finance_DB").sheet1 
@@ -53,8 +53,9 @@ def load_data():
 with st.sidebar.form(key='add_txn_form'):
     st.header("➕ Add Transaction")
     
+    # Removed Date Input (System will handle it)
+    
     # Input Widgets
-    input_date = st.date_input("Date")
     input_amount = st.number_input("Amount", min_value=0.0, step=10.0)
     input_category = st.selectbox("Category", ["Food", "Transport", "Bills", "Shopping", "Entertainment", "Health", "Investments"])
     input_desc = st.text_input("Description")
@@ -68,15 +69,20 @@ with st.sidebar.form(key='add_txn_form'):
             client = get_gspread_client()
             sheet = client.open("Master_Finance_DB").sheet1
             
-            # 2. Format Date
-            date_str = input_date.strftime("%Y-%m-%d")
+            # 2. Get Current Time in IST (Hyderabad)
+            # Streamlit Cloud is UTC, so we add 5 hours 30 mins
+            utc_now = datetime.utcnow()
+            ist_now = utc_now + timedelta(hours=5, minutes=30)
+            
+            # Format exactly like iPhone: "YYYY-MM-DD HH:MM:SS"
+            date_str = ist_now.strftime("%Y-%m-%d %H:%M:%S")
             
             # 3. Append Row (Order: Date, Amount, Category, Desc, Mode)
             sheet.append_row([date_str, input_amount, input_category, input_desc, input_mode])
             
-            st.success("✅ Saved!")
+            st.success(f"✅ Saved! Date logged: {date_str}")
             
-            # 4. Clear Cache & Reload so the new data appears instantly
+            # 4. Clear Cache & Reload
             st.cache_data.clear()
             st.rerun()
             
