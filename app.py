@@ -19,8 +19,9 @@ def get_gspread_client():
 @st.cache_data(ttl=600)
 def load_data():
     client = get_gspread_client()
-    # Ensure this matches your Sheet Name exactly
     sheet = client.open("Master_Finance_DB").sheet1 
+    # Use get_all_values instead of records to handle messy headers better, 
+    # but records is fine if headers are solid. Let's stick to records.
     data = sheet.get_all_records()
     
     if not data:
@@ -28,15 +29,23 @@ def load_data():
 
     df = pd.DataFrame(data)
     
-    # Cleaning
-    # Force 'Amount' to numeric, turning errors (like empty strings) into 0
+    # 1. Clean Amount
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     
-    # Handle Dates
-    # Convert to string first to ensure safety, then use 'mixed' format
-    df['Date'] = pd.to_datetime(df['Date'].astype(str), format='mixed', errors='coerce')
-    df['Month_Sort'] = df['Date'].dt.strftime('%Y-%m') # Sorting: 2025-12
-    df['Month_Label'] = df['Date'].dt.strftime('%b %Y') # Label: Dec 2025
+    # 2. Clean Date (THE NUCLEAR FIX)
+    # Step A: Ensure it is a string
+    df['Date'] = df['Date'].astype(str)
+    
+    # Step B: Split by space and take the first chunk (The Date)
+    # This strips the time off the iPhone entries
+    df['Date'] = df['Date'].apply(lambda x: x.split(' ')[0])
+    
+    # Step C: Convert to datetime (Now everything looks identical: YYYY-MM-DD)
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    
+    # 3. Helpers
+    df['Month_Sort'] = df['Date'].dt.strftime('%Y-%m')
+    df['Month_Label'] = df['Date'].dt.strftime('%b %Y')
     
     return df
 
