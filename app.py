@@ -190,4 +190,47 @@ with tab_budget:
     else:
         st.info("Add transactions and budget targets to see comparison.")
 
-# ---
+# --- TAB 3: TIME AUDIT ---
+with tab_time:
+    if not sub_time.empty:
+        total_hrs = sub_time['Hours'].sum()
+        
+        # CATEGORY MATCHING (Adjust keywords to your calendar)
+        work = sub_time[sub_time['Category'].str.contains('Work|Office|Job', case=False, na=False)]['Hours'].sum()
+        commute = sub_time[sub_time['Category'].str.contains('Commute|Travel', case=False, na=False)]['Hours'].sum()
+        health = sub_time[sub_time['Category'].str.contains('Gym|Health', case=False, na=False)]['Hours'].sum()
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Tracked", f"{total_hrs:.1f}h")
+        m2.metric("Deep Work", f"{work:.1f}h")
+        m3.metric("Commute", f"{commute:.1f}h")
+        m4.metric("Health", f"{health:.1f}h")
+        
+        st.divider()
+        
+        # HOURLY RATE CALCULATOR
+        c_calc, c_vis = st.columns([1, 2])
+        with c_calc:
+            st.subheader("🧠 Real Hourly Rate")
+            salary = st.number_input("Monthly Income", value=100000, step=5000)
+            real_effort = work + commute
+            if real_effort > 0:
+                # Simple Rate based on tracked hours
+                rate = salary / (real_effort * (30/sub_time['Date'].nunique())) # Projection
+                st.metric("Your Real Rate", f"₹{rate:,.0f} / hr")
+            else:
+                st.info("Log 'Work' events to see rate.")
+                
+        with c_vis:
+            st.plotly_chart(px.pie(sub_time, values='Hours', names='Category', hole=0.4, title="Time Distribution"), use_container_width=True)
+            
+        st.subheader("Daily Rhythm")
+        daily_stack = sub_time.groupby(['Date', 'Category'])['Hours'].sum().reset_index()
+        st.plotly_chart(px.bar(daily_stack, x='Date', y='Hours', color='Category'), use_container_width=True)
+    else:
+        st.warning("No time logs found. Run your 'Sync Calendar' shortcut!")
+
+# --- TAB 4: RAW DATA ---
+with tab_raw:
+    st.dataframe(sub_tx)
+    st.dataframe(sub_time)
