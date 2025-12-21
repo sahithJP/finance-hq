@@ -33,7 +33,8 @@ def load_data():
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     
     # Handle Dates
-    df['Date'] = pd.to_datetime(df['Date'])
+    # Convert to string first to ensure safety, then use 'mixed' format
+    df['Date'] = pd.to_datetime(df['Date'].astype(str), format='mixed', errors='coerce')
     df['Month_Sort'] = df['Date'].dt.strftime('%Y-%m') # Sorting: 2025-12
     df['Month_Label'] = df['Date'].dt.strftime('%b %Y') # Label: Dec 2025
     
