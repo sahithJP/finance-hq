@@ -6,6 +6,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 import calendar
+import numpy as np  # Added for robust infinity handling
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Life Operating System", page_icon="🧬", layout="wide")
@@ -166,38 +167,48 @@ with tab_fin:
             cat_agg = sub_tx.groupby('Category')['Amount'].sum().reset_index()
             st.plotly_chart(px.pie(cat_agg, values='Amount', names='Category', hole=0.4), use_container_width=True)
 
-# --- TAB 2: BUDGET VS ACTUAL (FIXED) ---
+# --- TAB 2: BUDGET VS ACTUAL (SAFE MODE) ---
 with tab_budget:
     if not sub_tx.empty and not df_budget.empty:
         actuals = sub_tx.groupby('Category')['Amount'].sum().reset_index()
         merged = pd.merge(df_budget, actuals, on='Category', how='outer').fillna(0)
         
-        # FIX: Handle Division by Zero safely
+        # 1. SAFE CALCULATION
         merged['Usage %'] = 0.0
-        
-        # Calculate only where limit > 0
         mask_valid = merged['Monthly_Limit'] > 0
         merged.loc[mask_valid, 'Usage %'] = (merged.loc[mask_valid, 'Amount'] / merged.loc[mask_valid, 'Monthly_Limit']) * 100
         
-        # If Limit is 0 but spent > 0, set usage to 100% to indicate overflow
-        mask_zero_limit = (merged['Monthly_Limit'] == 0) & (merged['Amount'] > 0)
-        merged.loc[mask_zero_limit, 'Usage %'] = 100.0
+        # 2. HANDLE ZERO LIMIT CASE (Avoid Infinity)
+        mask_zero = (merged['Monthly_Limit'] == 0) & (merged['Amount'] > 0)
+        merged.loc[mask_zero, 'Usage %'] = 100.0
+        
+        # 3. NUCLEAR OPTION: Replace ANY remaining infinity with 0
+        merged = merged.replace([np.inf, -np.inf], 0)
 
         merged = merged.sort_values(by='Amount', ascending=False)
         
         for i, row in merged.iterrows():
             cat = row['Category']
-            spent = row['Amount']
-            limit = row['Monthly_Limit']
+            spent = float(row['Amount'])
+            limit = float(row['Monthly_Limit'])
             pct = row['Usage %']
             
             col_status = "✅" if pct < 80 else "⚠️" if pct < 100 else "🚨"
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.write(f"**{cat}** {col_status}")
-                # Ensure pct is safely within 0-100 for the progress bar
-                safe_pct = max(0, min(int(pct), 100))
-                st.progress(safe_pct)
+                
+                # 4. FINAL CRASH PROTECTION
+                try:
+                    # Force valid integer between 0 and 100
+                    if pd.isna(pct): pct = 0
+                    safe_pct = int(pct)
+                    safe_pct = max(0, min(safe_pct, 100))
+                    st.progress(safe_pct)
+                except Exception:
+                    # If anything goes wrong (Infinity, NaN), default to 0 to prevent crash
+                    st.progress(0)
+                    
             with c2:
                 st.write(f"₹{spent:,.0f} / ₹{limit:,.0f}")
     else:
