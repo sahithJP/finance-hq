@@ -18,7 +18,7 @@ def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# --- LOAD DATA ---
+# --- LOAD DATA (FORCE MINUTES) ---
 @st.cache_data(ttl=60)
 def load_data():
     client = get_gspread_client()
@@ -44,24 +44,20 @@ def load_data():
             df_budget['Monthly_Limit'] = pd.to_numeric(df_budget['Monthly_Limit'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0)
     except: df_budget = pd.DataFrame(columns=['Category', 'Monthly_Limit'])
 
-    # 3. TIME LOGS (UPDATED FOR MINUTES)
+    # 3. TIME LOGS (FIX: ALWAYS TREAT AS MINUTES)
     try:
         ws_time = sh.worksheet("Time_Logs")
         raw_time = ws_time.get_all_values()
         df_time = pd.DataFrame(raw_time[1:], columns=raw_time[0]) if len(raw_time) > 1 else pd.DataFrame()
         if not df_time.empty:
-            # We look for 'Duration_Mins' now
-            col_map = {c: c for c in df_time.columns}
-            # Handle if you named it 'Hours' previously or 'Duration_Mins'
-            target_col = 'Duration_Mins' if 'Duration_Mins' in df_time.columns else 'Hours'
+            # We grab the 4th column (Index 3) regardless of whether it's named 'Hours' or 'Duration_Mins'
+            # This ensures we always get the number you typed.
+            time_col = df_time.columns[3] if len(df_time.columns) > 3 else 'Duration_Mins'
             
-            df_time['Raw_Time'] = pd.to_numeric(df_time[target_col], errors='coerce').fillna(0)
+            df_time['Minutes_Logged'] = pd.to_numeric(df_time[time_col], errors='coerce').fillna(0)
             
-            # If the column is Duration_Mins, divide by 60. If it was Hours, keep it.
-            if target_col == 'Duration_Mins':
-                df_time['Hours'] = df_time['Raw_Time'] / 60
-            else:
-                df_time['Hours'] = df_time['Raw_Time']
+            # FORCE CONVERSION: Always divide by 60 to get Hours for charts
+            df_time['Hours'] = df_time['Minutes_Logged'] / 60
             
             df_time['Date'] = pd.to_datetime(df_time['Date'].astype(str), errors='coerce')
             df_time['Month_Sort'] = df_time['Date'].dt.strftime('%Y-%m')
@@ -77,7 +73,7 @@ except Exception as e:
     st.error(f"Data Error: {e}")
     st.stop()
 
-# --- SIDEBAR ---
+# --- SIDEBAR: INPUTS ---
 with st.sidebar:
     st.header("⚙️ Controls")
     if st.button("🔄 Refresh Data"):
@@ -121,8 +117,9 @@ with st.sidebar:
             t_date = st.date_input("Date", value=date.today())
             t_cat = st.selectbox("Category", ["Deep Work", "Meetings", "Commute", "Health/Gym", "Learning", "Life Admin", "Sleep", "Entertainment"])
             t_desc = st.text_input("Activity Description")
-            # CHANGED: Minutes Input
-            t_mins = st.number_input("Duration (Minutes)", min_value=1, step=15, value=60)
+            
+            # EXPLICIT MINUTE INPUT
+            t_mins = st.number_input("Duration (Minutes)", min_value=5, step=5, value=60)
             
             if st.form_submit_button('Save Time Log'):
                 try:
@@ -135,7 +132,7 @@ with st.sidebar:
                         ws_t = sh.add_worksheet(title="Time_Logs", rows=1000, cols=5)
                         ws_t.append_row(["Date", "Category", "Activity", "Duration_Mins"])
                     
-                    # Appending Minutes
+                    # We save the raw minutes (e.g., 90)
                     ws_t.append_row([str(t_date), t_cat, t_desc, t_mins])
                     st.success(f"Logged {t_mins} mins!")
                     st.cache_data.clear()
@@ -180,12 +177,12 @@ with tab_fin:
                 fig.update_layout(title="📉 Budget Burndown", xaxis_title="Date", yaxis_title="Remaining")
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("Set budgets in 'Budgets' tab to see Burndown chart.")
+                st.info("Set budgets in 'Budgets' tab.")
         with c2:
             cat_agg = sub_tx.groupby('Category')['Amount'].sum().reset_index()
             st.plotly_chart(px.pie(cat_agg, values='Amount', names='Category', hole=0.4), use_container_width=True)
 
-# --- TAB 2: BUDGET VS ACTUAL (SAFE) ---
+# --- TAB 2: BUDGET VS ACTUAL ---
 with tab_budget:
     if not sub_tx.empty and not df_budget.empty:
         actuals = sub_tx.groupby('Category')['Amount'].sum().reset_index()
@@ -217,12 +214,12 @@ with tab_budget:
             with c2:
                 st.write(f"₹{spent:,.0f} / ₹{limit:,.0f}")
     else:
-        st.info("Add transactions and budget targets.")
+        st.info("Add transactions and budgets.")
 
-# --- TAB 3: TIME AUDIT (CONVERTED TO HOURS) ---
+# --- TAB 3: TIME AUDIT ---
 with tab_time:
     if not sub_time.empty:
-        # NOTE: 'Hours' is calculated from 'Duration_Mins' in load_data()
+        # NOTE: Calculations are based on 'Hours' column (derived from Minutes / 60)
         total_hrs = sub_time['Hours'].sum()
         
         work_hrs = sub_time[sub_time['Category'].isin(['Deep Work', 'Meetings'])]['Hours'].sum()
@@ -242,7 +239,7 @@ with tab_time:
             st.plotly_chart(px.pie(sub_time, values='Hours', names='Category', hole=0.4, title="Time Distribution (Hours)"), use_container_width=True)
         with c_stack:
             daily_stack = sub_time.groupby(['Date', 'Category'])['Hours'].sum().reset_index()
-            st.plotly_chart(px.bar(daily_stack, x='Date', y='Hours', color='Category', title="Daily Rhythm"), use_container_width=True)
+            st.plotly_chart(px.bar(daily_stack, x='Date', y='Hours', color='Category', title="Daily Rhythm (Hours)"), use_container_width=True)
             
         st.divider()
         st.subheader("🧠 Real Hourly Rate")
@@ -264,5 +261,5 @@ with tab_raw:
     st.subheader("Transactions")
     st.dataframe(sub_tx, use_container_width=True)
     st.divider()
-    st.subheader("Time Logs (Minutes)")
+    st.subheader("Time Logs (Raw Data)")
     st.dataframe(sub_time, use_container_width=True)
