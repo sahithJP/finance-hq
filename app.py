@@ -166,12 +166,23 @@ with tab_fin:
             cat_agg = sub_tx.groupby('Category')['Amount'].sum().reset_index()
             st.plotly_chart(px.pie(cat_agg, values='Amount', names='Category', hole=0.4), use_container_width=True)
 
-# --- TAB 2: BUDGET VS ACTUAL ---
+# --- TAB 2: BUDGET VS ACTUAL (FIXED) ---
 with tab_budget:
     if not sub_tx.empty and not df_budget.empty:
         actuals = sub_tx.groupby('Category')['Amount'].sum().reset_index()
         merged = pd.merge(df_budget, actuals, on='Category', how='outer').fillna(0)
-        merged['Usage %'] = (merged['Amount'] / merged['Monthly_Limit']) * 100
+        
+        # FIX: Handle Division by Zero safely
+        merged['Usage %'] = 0.0
+        
+        # Calculate only where limit > 0
+        mask_valid = merged['Monthly_Limit'] > 0
+        merged.loc[mask_valid, 'Usage %'] = (merged.loc[mask_valid, 'Amount'] / merged.loc[mask_valid, 'Monthly_Limit']) * 100
+        
+        # If Limit is 0 but spent > 0, set usage to 100% to indicate overflow
+        mask_zero_limit = (merged['Monthly_Limit'] == 0) & (merged['Amount'] > 0)
+        merged.loc[mask_zero_limit, 'Usage %'] = 100.0
+
         merged = merged.sort_values(by='Amount', ascending=False)
         
         for i, row in merged.iterrows():
@@ -184,7 +195,9 @@ with tab_budget:
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.write(f"**{cat}** {col_status}")
-                st.progress(min(int(pct), 100))
+                # Ensure pct is safely within 0-100 for the progress bar
+                safe_pct = max(0, min(int(pct), 100))
+                st.progress(safe_pct)
             with c2:
                 st.write(f"₹{spent:,.0f} / ₹{limit:,.0f}")
     else:
