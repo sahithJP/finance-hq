@@ -18,7 +18,7 @@ def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# --- LOAD DATA (ALL SHEETS) ---
+# --- LOAD DATA ---
 @st.cache_data(ttl=60)
 def load_data():
     client = get_gspread_client()
@@ -44,14 +44,25 @@ def load_data():
             df_budget['Monthly_Limit'] = pd.to_numeric(df_budget['Monthly_Limit'].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0)
     except: df_budget = pd.DataFrame(columns=['Category', 'Monthly_Limit'])
 
-    # 3. TIME LOGS (UPDATED FOR MANUAL ENTRY)
+    # 3. TIME LOGS (UPDATED FOR MINUTES)
     try:
         ws_time = sh.worksheet("Time_Logs")
         raw_time = ws_time.get_all_values()
         df_time = pd.DataFrame(raw_time[1:], columns=raw_time[0]) if len(raw_time) > 1 else pd.DataFrame()
         if not df_time.empty:
-            # We expect columns: Date, Category, Activity, Hours
-            df_time['Hours'] = pd.to_numeric(df_time['Hours'], errors='coerce').fillna(0)
+            # We look for 'Duration_Mins' now
+            col_map = {c: c for c in df_time.columns}
+            # Handle if you named it 'Hours' previously or 'Duration_Mins'
+            target_col = 'Duration_Mins' if 'Duration_Mins' in df_time.columns else 'Hours'
+            
+            df_time['Raw_Time'] = pd.to_numeric(df_time[target_col], errors='coerce').fillna(0)
+            
+            # If the column is Duration_Mins, divide by 60. If it was Hours, keep it.
+            if target_col == 'Duration_Mins':
+                df_time['Hours'] = df_time['Raw_Time'] / 60
+            else:
+                df_time['Hours'] = df_time['Raw_Time']
+            
             df_time['Date'] = pd.to_datetime(df_time['Date'].astype(str), errors='coerce')
             df_time['Month_Sort'] = df_time['Date'].dt.strftime('%Y-%m')
             df_time['Category'] = df_time['Category'].astype(str).str.strip()
@@ -66,7 +77,7 @@ except Exception as e:
     st.error(f"Data Error: {e}")
     st.stop()
 
-# --- SIDEBAR: INPUT & FILTERS ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Controls")
     if st.button("🔄 Refresh Data"):
@@ -83,8 +94,8 @@ with st.sidebar:
 
     st.divider()
 
-    # --- FORM 1: ADD EXPENSE ---
-    with st.expander("💸 Add Expense", expanded=True):
+    # --- FORM 1: EXPENSE ---
+    with st.expander("💸 Add Expense", expanded=False):
         with st.form(key='add_txn_form'):
             input_amount = st.number_input("Amount", min_value=0.0, step=10.0)
             input_category = st.selectbox("Category", ["Food", "Transport", "Bills", "Shopping", "Entertainment", "Health", "Investments","Travel"])
@@ -104,43 +115,42 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    # --- FORM 2: LOG TIME (NEW) ---
-    with st.expander("⏱️ Log Time", expanded=False):
+    # --- FORM 2: TIME (MINUTES) ---
+    with st.expander("⏱️ Log Time", expanded=True):
         with st.form(key='add_time_form'):
-            # Default date is today
             t_date = st.date_input("Date", value=date.today())
             t_cat = st.selectbox("Category", ["Deep Work", "Meetings", "Commute", "Health/Gym", "Learning", "Life Admin", "Sleep", "Entertainment"])
             t_desc = st.text_input("Activity Description")
-            t_hours = st.number_input("Hours Spent", min_value=0.1, step=0.5, format="%.1f")
+            # CHANGED: Minutes Input
+            t_mins = st.number_input("Duration (Minutes)", min_value=1, step=15, value=60)
             
             if st.form_submit_button('Save Time Log'):
                 try:
                     client = get_gspread_client()
                     sh = client.open("Master_Finance_DB")
                     
-                    # Ensure Time_Logs sheet exists or create it
                     try:
                         ws_t = sh.worksheet("Time_Logs")
                     except:
                         ws_t = sh.add_worksheet(title="Time_Logs", rows=1000, cols=5)
-                        ws_t.append_row(["Date", "Category", "Activity", "Hours"])
+                        ws_t.append_row(["Date", "Category", "Activity", "Duration_Mins"])
                     
-                    # Append Data
-                    ws_t.append_row([str(t_date), t_cat, t_desc, t_hours])
-                    st.success("Time Logged!")
+                    # Appending Minutes
+                    ws_t.append_row([str(t_date), t_cat, t_desc, t_mins])
+                    st.success(f"Logged {t_mins} mins!")
                     st.cache_data.clear()
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-# --- DASHBOARD TABS ---
+# --- TABS ---
 tab_fin, tab_budget, tab_time, tab_raw = st.tabs(["📊 Analytics", "🎯 Budget vs Actual", "⏳ Time Audit", "📄 Data"])
 
 # 1. FILTER DATA
 sub_tx = df_tx[df_tx['Month_Sort'] == selected_month] if not df_tx.empty else pd.DataFrame()
 sub_time = df_time[df_time['Month_Sort'] == selected_month] if not df_time.empty else pd.DataFrame()
 
-# --- TAB 1: ANALYTICS (BURNDOWN) ---
+# --- TAB 1: ANALYTICS ---
 with tab_fin:
     if not sub_tx.empty:
         total_spend = sub_tx['Amount'].sum()
@@ -171,12 +181,11 @@ with tab_fin:
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Set budgets in 'Budgets' tab to see Burndown chart.")
-                
         with c2:
             cat_agg = sub_tx.groupby('Category')['Amount'].sum().reset_index()
             st.plotly_chart(px.pie(cat_agg, values='Amount', names='Category', hole=0.4), use_container_width=True)
 
-# --- TAB 2: BUDGET VS ACTUAL (SAFE MODE) ---
+# --- TAB 2: BUDGET VS ACTUAL (SAFE) ---
 with tab_budget:
     if not sub_tx.empty and not df_budget.empty:
         actuals = sub_tx.groupby('Category')['Amount'].sum().reset_index()
@@ -185,10 +194,8 @@ with tab_budget:
         merged['Usage %'] = 0.0
         mask_valid = merged['Monthly_Limit'] > 0
         merged.loc[mask_valid, 'Usage %'] = (merged.loc[mask_valid, 'Amount'] / merged.loc[mask_valid, 'Monthly_Limit']) * 100
-        
         mask_zero = (merged['Monthly_Limit'] == 0) & (merged['Amount'] > 0)
         merged.loc[mask_zero, 'Usage %'] = 100.0
-        
         merged = merged.replace([np.inf, -np.inf], 0)
         merged = merged.sort_values(by='Amount', ascending=False)
         
@@ -197,7 +204,6 @@ with tab_budget:
             spent = float(row['Amount'])
             limit = float(row['Monthly_Limit'])
             pct = row['Usage %']
-            
             col_status = "✅" if pct < 80 else "⚠️" if pct < 100 else "🚨"
             c1, c2 = st.columns([3, 1])
             with c1:
@@ -208,18 +214,17 @@ with tab_budget:
                     safe_pct = max(0, min(safe_pct, 100))
                     st.progress(safe_pct)
                 except: st.progress(0)
-                    
             with c2:
                 st.write(f"₹{spent:,.0f} / ₹{limit:,.0f}")
     else:
-        st.info("Add transactions and budget targets to see comparison.")
+        st.info("Add transactions and budget targets.")
 
-# --- TAB 3: TIME AUDIT (MANUAL LOG VISUALS) ---
+# --- TAB 3: TIME AUDIT (CONVERTED TO HOURS) ---
 with tab_time:
     if not sub_time.empty:
+        # NOTE: 'Hours' is calculated from 'Duration_Mins' in load_data()
         total_hrs = sub_time['Hours'].sum()
         
-        # CATEGORY MATCHING
         work_hrs = sub_time[sub_time['Category'].isin(['Deep Work', 'Meetings'])]['Hours'].sum()
         commute_hrs = sub_time[sub_time['Category'] == 'Commute']['Hours'].sum()
         health_hrs = sub_time[sub_time['Category'] == 'Health/Gym']['Hours'].sum()
@@ -232,37 +237,32 @@ with tab_time:
         m4.metric("Learning", f"{learn_hrs:.1f}h")
         
         st.divider()
-        
         c_vis, c_stack = st.columns(2)
         with c_vis:
-            st.plotly_chart(px.pie(sub_time, values='Hours', names='Category', hole=0.4, title="Time Distribution"), use_container_width=True)
-            
+            st.plotly_chart(px.pie(sub_time, values='Hours', names='Category', hole=0.4, title="Time Distribution (Hours)"), use_container_width=True)
         with c_stack:
             daily_stack = sub_time.groupby(['Date', 'Category'])['Hours'].sum().reset_index()
             st.plotly_chart(px.bar(daily_stack, x='Date', y='Hours', color='Category', title="Daily Rhythm"), use_container_width=True)
             
-        # HOURLY RATE CALCULATOR
         st.divider()
         st.subheader("🧠 Real Hourly Rate")
         c_calc, _ = st.columns([1, 2])
         with c_calc:
             salary = st.number_input("Monthly Income", value=100000, step=5000)
-            real_effort = work_hrs + commute_hrs # Total time 'spent' on job
-            
+            real_effort = work_hrs + commute_hrs
             if real_effort > 0:
-                # Extrapolate to month if we are only part way through
                 days_logged = sub_time['Date'].nunique()
                 if days_logged > 0:
-                    projected_hours = (real_effort / days_logged) * 22 # Approx 22 work days
+                    projected_hours = (real_effort / days_logged) * 22
                     rate = salary / projected_hours if projected_hours > 0 else 0
-                    st.metric("Effective Hourly Rate", f"₹{rate:,.0f} / hr", help="Income / (Work + Commute Hours)")
+                    st.metric("Effective Hourly Rate", f"₹{rate:,.0f} / hr")
     else:
-        st.info("Start logging time using the sidebar form '⏱️ Log Time'!")
+        st.info("Start logging time!")
 
 # --- TAB 4: RAW DATA ---
 with tab_raw:
     st.subheader("Transactions")
     st.dataframe(sub_tx, use_container_width=True)
     st.divider()
-    st.subheader("Time Logs")
+    st.subheader("Time Logs (Minutes)")
     st.dataframe(sub_time, use_container_width=True)
