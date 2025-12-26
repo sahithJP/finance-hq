@@ -103,9 +103,9 @@ with st.sidebar:
     with st.form(key='add_txn_form'):
         st.header("➕ Add Expense")
         input_amount = st.number_input("Amount", min_value=0.0, step=10.0)
-        input_category = st.selectbox("Category", ["Food", "Transport", "Bills", "Shopping", "Entertainment", "Health", "Investments"])
+        input_category = st.selectbox("Category", ["Food", "Transport", "Bills", "Shopping", "Entertainment", "Health", "Investments","Travel"])
         input_desc = st.text_input("Description")
-        input_mode = st.selectbox("Payment Mode", ["UPI", "Credit Card", "Cash"])
+        input_mode = st.selectbox("Payment Mode", ["UPI", "Credit Card", "Cash","SI"])
         
         if st.form_submit_button('Save'):
             try:
